@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify frame assets
+        run: |
+          count=$(ls assets/frame-*.webp 2>/dev/null | wc -l)
+          echo "assets/frame-*.webp: $count"
+          if [ "$count" -ne 31 ]; then
+            echo "::warning::仓库里缺少素材，改为从上游抓取"
+            node scripts/fetch-frames.mjs
+          fi
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify ladder / level mapping
+        run: node verify-levels.mjs
+
+      - name: Render component tests (jsdom)
+        run: node render-test.mjs
+
+      - name: Pack
+        run: npm pack --pack-destination dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsh-liang-calibrator-tgz
+          path: dist/*.tgz

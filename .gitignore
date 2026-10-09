@@ -1,0 +1,12 @@
+> 上游人像素材按原仓库的做法随仓库分发（见 README「素材与授权」），MIT-0 只覆盖代码。
+> `scripts/fetch-frames.mjs` 保留为可选的刷新/补抓工具。
+
+node_modules/
+.client.legacy.*
+src/.client.legacy.*
+.preview/
+preview.png
+*.tgz
+*.log
+.DS_Store
+
