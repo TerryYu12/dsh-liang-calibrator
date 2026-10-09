@@ -67,14 +67,14 @@ function settings(stageMode) {
   </div>`
 }
 
-export const markup = ({ score = 0, expanded = false, view = 'slider', stageMode = true, blocked, inline = false }) =>
-  `<div class="ls-root"${inline ? ' style="display: inline-flex"' : ''}>
+export const markup = ({ score = 0, expanded = false, view = 'slider', stageMode = true, blocked, inline = false, route = 'deepseek-account · DeepSeek-V41-Flash · low' }) =>
+  `<div class="ls-root"${inline ? ' style="display: block"' : ''}>
   <button type="button" class="ls-trigger${expanded ? ' ls-trigger-on' : ''}">
     <span class="ls-tri">${expanded ? '▾' : '▸'}</span>
-    <span class="ls-trigger-text">cmd · deepseek/deepseek-v4.1-flash · max</span>
+    <span class="ls-trigger-text">${route}</span>
   </button>
   ${blocked === undefined ? '' : `<span class="ls-blocked">${blocked}<button type="button" class="ls-retry">重试</button></span>`}
-  ${expanded ? `<div class="ls-popover" style="position: absolute; right: 0; top: calc(100% + 8px); width: 420px; max-height: none">
+  ${expanded ? `<div class="ls-popover" style="position: static; width: 420px; max-height: none; margin-top: 8px">
     <div class="ls-popover-head">
       ${view === 'settings'
         ? `<span class="ls-mode"><button type="button" class="ls-mode-btn${stageMode ? ' ls-mode-on' : ''}">按状态 6</button><button type="button" class="ls-mode-btn${stageMode ? '' : ' ls-mode-on'}">按档位 31</button></span>`
