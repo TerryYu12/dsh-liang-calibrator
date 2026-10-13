@@ -490,7 +490,7 @@ async function mount(snapshot, props = {}, { expand = true } = {}) {
   const { container, dir } = await mount(CATALOG)
   await click(container.querySelector('.ls-gear'))
   const modes = container.querySelectorAll('.ls-mode-btn')
-  check(modes.length === 2, '应有「按状态 6 / 按档位 31」两个粒度')
+  check(modes.length === 4, `应有「按状态 6 / 按档位 31 / 名字 31 / 背图 31」四个粒度，实际 ${modes.length}`)
   check(container.querySelectorAll('.ls-settings-row').length === 6, '默认按状态显示 6 行')
 
   await click(modes[1])
@@ -522,6 +522,112 @@ async function mount(snapshot, props = {}, { expand = true } = {}) {
   const stored = JSON.parse(dom.window.localStorage.getItem('liang-calibrator:stages') ?? 'null')
   check(stored?.frames?.[30]?.model === 'only-top', `逐档设置应存在 frames 里，实际 ${JSON.stringify(stored?.frames?.[30])}`)
   console.log('scenario 17 (per-frame overrides): ok')
+}
+
+// 18) 名字 31：逐档改名、相邻同名合并、站名行 / 芯片 / 无障碍文案都跟着变。
+{
+  dom.window.localStorage.removeItem('liang-calibrator:stages')
+  dom.window.localStorage.removeItem('liang-calibrator:names')
+  const { container, dir } = await mount(CATALOG)
+  await click(container.querySelector('.ls-gear'))
+  const modes = container.querySelectorAll('.ls-mode-btn')
+  await click(modes[2])
+
+  const rows = container.querySelectorAll('.ls-settings-row-name')
+  check(rows.length === 31, `名字模式应有 31 行，实际 ${rows.length}`)
+  const input30 = rows[30].querySelector('input')
+  check(input30.getAttribute('placeholder') === '梁祖', `占位符应是默认梁名，实际 ${input30.getAttribute('placeholder')}`)
+  await typeInto(input30, '梁帝')
+  await typeInto(rows[29].querySelector('input'), '梁帝')
+  const storedNames = JSON.parse(dom.window.localStorage.getItem('liang-calibrator:names') ?? 'null')
+  check(storedNames?.[30] === '梁帝', `名字应写入 localStorage，实际 ${JSON.stringify(storedNames?.[30])}`)
+
+  await click(container.querySelector('.ls-gear'))
+  const rangeInput = container.querySelector('input.ls-range')
+  await typeInto(rangeInput, '15')
+  const labels = [...container.querySelectorAll('.ls-station')].map((node) => node.textContent)
+  check(labels.length === 6, `+14 / +15 同名合并后仍应是 6 段，实际 ${labels.length}：${labels.join('/')}`)
+  check(labels.includes('梁帝'), `站名行应出现自定义名，实际 ${labels.join('/')}`)
+  check(container.querySelector('.ls-station-active')?.textContent === '梁帝', '当前段应高亮自定义名')
+  check((rangeInput.getAttribute('aria-valuetext') ?? '').includes('梁帝'), '无障碍文案应使用自定义名')
+
+  await act(async () => {
+    dir.set({ ...CATALOG, current: { provider: 'deepseek-account', model: 'deepseek-v4-pro', reasoningEffort: 'max' } })
+  })
+  check((container.querySelector('.ls-stage')?.textContent ?? '') === '梁帝', '芯片按当前选择显示自定义名')
+
+  dom.window.localStorage.removeItem('liang-calibrator:names')
+  console.log('scenario 18 (custom names): ok')
+}
+
+// 19) 全部 31 档同名：站名行只剩一段（可以几个档位同一个名字）。
+{
+  dom.window.localStorage.setItem('liang-calibrator:names', JSON.stringify(new Array(31).fill('梁')))
+  const { container } = await mount(CATALOG)
+  const labels = container.querySelectorAll('.ls-station')
+  check(labels.length === 1, `全部同名应只剩一段，实际 ${labels.length}`)
+  check(labels[0]?.textContent === '梁', `段名应为自定义名，实际 ${labels[0]?.textContent}`)
+  dom.window.localStorage.removeItem('liang-calibrator:names')
+  console.log('scenario 19 (one name for the whole ladder): ok')
+}
+
+// 20) 背图 31：逐档指定自定义图，滑到该档铺自定义图，清除后回退内置图。
+{
+  dom.window.localStorage.removeItem('liang-calibrator:images')
+  const { container } = await mount(CATALOG)
+  await click(container.querySelector('.ls-gear'))
+  await click(container.querySelectorAll('.ls-mode-btn')[3])
+  const rows = container.querySelectorAll('.ls-settings-row-image')
+  check(rows.length === 31, `背图模式应有 31 行，实际 ${rows.length}`)
+  check(rows[0].querySelector('.ls-settings-empty') !== null, '未指定时占位应显示「内置」')
+
+  const fileInput = rows[30].querySelector('input[type="file"]')
+  check(fileInput !== null, '每行应有选图入口')
+  const file = new dom.window.File([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])], 'custom.png', { type: 'image/png' })
+  Object.defineProperty(fileInput, 'files', { value: [file], configurable: true })
+  await act(async () => {
+    fileInput.dispatchEvent(new dom.window.Event('change', { bubbles: true }))
+  })
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  })
+
+  const storedImages = JSON.parse(dom.window.localStorage.getItem('liang-calibrator:images') ?? 'null')
+  check(typeof storedImages?.[30] === 'string' && storedImages[30] !== '', `背图映射应持久化，实际 ${JSON.stringify(storedImages?.[30])}`)
+  check(container.querySelectorAll('.ls-settings-row-image')[30].querySelector('.ls-settings-thumb') !== null, '指定后应显示缩略图')
+
+  await click(container.querySelector('.ls-gear'))
+  const rangeInput = container.querySelector('input.ls-range')
+  await typeInto(rangeInput, '15')
+  const sharp = document.querySelector('.ls-wallpaper.ls-wallpaper-on')?.querySelector('.ls-wallpaper-sharp')
+  check((sharp?.getAttribute('src') ?? '').startsWith('blob:'), `+15 应铺自定义图，实际 ${(sharp?.getAttribute('src') ?? '(none)').slice(0, 30)}`)
+
+  await typeInto(rangeInput, '10')
+  check((sharp?.getAttribute('src') ?? '').startsWith('data:image/webp'), '其它档仍是内置档位图')
+
+  await click(container.querySelector('.ls-gear'))
+  await click(container.querySelectorAll('.ls-settings-row-image')[30].querySelector('.ls-settings-btn-clear'))
+  const clearedImages = JSON.parse(dom.window.localStorage.getItem('liang-calibrator:images') ?? 'null')
+  check(clearedImages?.[30] === null, `清除后映射应为空，实际 ${JSON.stringify(clearedImages?.[30])}`)
+
+  await click(container.querySelector('.ls-gear'))
+  await typeInto(container.querySelector('input.ls-range'), '15')
+  const sharpAfter = document.querySelector('.ls-wallpaper.ls-wallpaper-on')?.querySelector('.ls-wallpaper-sharp')
+  check((sharpAfter?.getAttribute('src') ?? '').startsWith('data:image/webp'), '清除后应回退内置图')
+  dom.window.localStorage.removeItem('liang-calibrator:images')
+  console.log('scenario 20 (custom backgrounds): ok')
+}
+
+// 21) 名字多到挤不下：站名行自动省略，当前档永远保留。
+{
+  const names = Array.from({ length: 31 }, (_, index) => `档${index}`)
+  dom.window.localStorage.setItem('liang-calibrator:names', JSON.stringify(names))
+  const { container } = await mount(CATALOG)
+  const labels = container.querySelectorAll('.ls-station')
+  check(labels.length > 3 && labels.length < 31, `31 个不同名应部分省略，实际 ${labels.length}`)
+  check(container.querySelector('.ls-station-active') !== null, '当前档标签必须保留')
+  dom.window.localStorage.removeItem('liang-calibrator:names')
+  console.log(`scenario 21 (dense names): ${labels.length}/31 labels kept`)
 }
 
 await rm('./.client.test.cjs', { force: true })

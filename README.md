@@ -2,7 +2,8 @@
 
 **滑动变祖器 31 档** —— 把 [DeepSeek Harness](https://github.com/deepseek-ai) 输入框里的「模型选择 + 推理等级」控件，换成一台物理课本里的**滑动变阻器**。
 
-拖滑片 = 同时切换模型与思考强度；滑动时对应的档位形象图会铺在 DSH 背景上，**停手 5 秒后自动淡出**。
+拖滑片 = 同时切换模型与思考强度；滑动时对应档位的形象图会铺在 DSH 背景上，**停手 5 秒后自动淡出**。
+档位图可以逐档换成本机自定义图片，31 档的名字也都能改。
 
 [![CI](https://github.com/TerryYu12/dsh-liang-calibrator/actions/workflows/ci.yml/badge.svg)](https://github.com/TerryYu12/dsh-liang-calibrator/actions/workflows/ci.yml)
 
@@ -27,18 +28,26 @@
 第一行是**模型名**（最大最亮），右侧是「梁名 + 带符号分值」，第二行是 `提供商 · 思考强度`。
 点面板外、按 `Esc`、或点右上角 `✕` 都能收起。
 
-### 3. 设置：按状态 6 / 按档位 31
+### 3. 设置：四页 —— 路由 / 名字 / 背图
 
 ![按状态设置](docs/03-settings-stage.png)
 
 ![按档位设置](docs/04-settings-frame.png)
 
+![名字设置](docs/06-settings-names.png)
+
+![背图设置](docs/07-settings-images.png)
+
 - **按状态 6**：小难梁 / 牢梁 / 梁子 / 梁圣 / 梁神 / 梁祖，各一条路由，整段生效；
 - **按档位 31**：`-15` … `00` … `+15` 逐档一行，只覆盖你想改的那一档；
-- 三列**都能手填**（provider / 模型 id / 思考强度），带自动补全但允许任意值 —— 接自己的 API 直接写进去即可；
+- **名字 31**：给 31 档各起一个名字；**相邻档位写成同一个名字就合并成一段**（跨段同名不合并），
+  滑杆下方的站名行跟着变；留空用默认梁名；
+- **背图 31**：31 档各可指定一张自定义图片，滑动到该档时铺满窗口；留空用内置档位图，
+  同一张图给多个档位只存一份；
+- 路由三列**都能手填**（provider / 模型 id / 思考强度），带自动补全但允许任意值 —— 接自己的 API 直接写进去即可；
 - 灰色占位符显示**自动分档会选什么**，所以不改也能一眼看出每档接的是哪条路由；
 - 优先级：**逐档 > 按状态 > 自动**；provider 不在当前目录时整行描琥珀色提示（仍会提交，由平台裁决）；
-- 「全部自动」一键清空，设置只存在本机浏览器（`localStorage`）。
+- 右上角一键清空，按钮随页变：**全部自动 / 全部默认 / 全部内置**；设置只存在本机浏览器。
 
 ### 4. 滑动时的背景：不影响你原来的壁纸
 
@@ -46,10 +55,20 @@
 
 档位图只做**临时叠加**：
 
+- 这一张图默认是内置档位图，也可以是你给这一档指定过的**自定义图**（见上节「背图 31」）；
 - 它挂在 `body` 的第一个子节点、`z-index: -1`，位置在**你原来的壁纸之上、DSH 界面之下**；
 - 显示期间把控件到 `body` 之间的面板**临时置为透明**，配合图层自带的压暗层保证文字可读；
 - **停手 5 秒后自动淡出**（淡出 320ms），随后**原样还原**所有被改过的样式；
 - 不修改、不替换你设置的壁纸，也不写入任何持久状态 —— 关掉插件后界面与原来完全一致。
+
+### 本机数据都存哪
+
+- 路由设置：`localStorage` 的 `liang-calibrator:stages`；
+- 名字：`localStorage` 的 `liang-calibrator:names`（31 项，读入时去首尾空格、截 24 字符）；
+- 背图：图片先压到长边 ≤ 1920 的 WebP，按内容哈希存进 **IndexedDB**（库 `liang-calibrator` / store `images`）；
+  档位 → 图片 的映射在 `localStorage` 的 `liang-calibrator:images`；不再被任何档位引用的图片会自动回收；
+- 排查现场：最近 8 条插件错误落在 `localStorage` 的 `liang-calibrator:errors`；
+- 以上都只在本机浏览器里，不上传、不随插件分发。
 
 ---
 
@@ -81,16 +100,18 @@
 同一组合占据连续若干档：**区间内拖动只换画面、不重复发请求**；外部改变模型（`/model` 命令、设置页）时，
 滑杆会回位到对应区间的代表档位。当前选择不在梯子上时，芯片回退显示真实路由，滑杆仍可跳到任意档位。
 
+名字（31 档可改名、相邻同名合并成段）与背图（逐档自定义）都只是**显示层**，不改变上面这张映射表。
+
 ---
 
 ## 安装
 
 ```sh
 # 从 Release 安装
-dsh plugin --profile <profile> add https://github.com/TerryYu12/dsh-liang-calibrator/releases/latest/download/dsh-liang-calibrator-0.8.0.tgz
+dsh plugin --profile <profile> add https://github.com/TerryYu12/dsh-liang-calibrator/releases/latest/download/dsh-liang-calibrator-0.9.0.tgz
 
 # 或本地 tarball
-dsh plugin --profile <profile> add /path/to/dsh-liang-calibrator-0.8.0.tgz
+dsh plugin --profile <profile> add /path/to/dsh-liang-calibrator-0.9.0.tgz
 ```
 
 `<profile>` 是你要装的 profile（通常是 `desktop`；用 `dsh plugin --profile desktop add …`）。
@@ -112,14 +133,15 @@ dsh plugin --profile <profile> remove dsh-liang-calibrator
 npm install
 node scripts/fetch-frames.mjs   # 可选：素材缺失时从上游补抓（仓库里已带）
 npm run build                   # 生成 lib/index.js 与 lib/client.js（内嵌 31 帧，约 2 MB）
-node verify-levels.mjs          # 31 档 / 6 状态边界与梯子生成
-node render-test.mjs            # jsdom + React 真渲染：17 个场景
-node tools/screenshot.mjs       # 重新生成 docs/ 里的界面截图（需要本机 Chrome/Edge）
+node verify-levels.mjs          # 31 档 / 6 状态边界与梯子生成、名字分段与背图映射的纯逻辑
+node render-test.mjs            # jsdom + React 真渲染：21 个场景
+node tools/screenshot.mjs       # 重新生成 docs/ 里的 7 张界面截图（需要本机 Chrome/Edge）
 npm pack
 ```
 
-`render-test.mjs` 覆盖的 17 个场景包括：档位提交、段内不重复提交、目录未就绪与自愈重试、
-锁定态、错误边界、背景图 5 秒淡出、注入面绝不抛错、折叠/展开/关闭、以及按状态与按档位两层设置。
+`render-test.mjs` 覆盖的 21 个场景包括：档位提交、段内不重复提交、目录未就绪与自愈重试、
+锁定态、错误边界、背景图 5 秒淡出、注入面绝不抛错、折叠/展开/关闭、按状态与按档位两层设置、
+逐档改名与同名合并、全梯同名、逐档自定义背图（含清除回退）、名字过多时站名行自动省略。
 
 > 实现上有三条**不能破坏**的约束，改动前请先读 README 的对应注释：
 > ① 客户端 `inject` 必须包含 `remote` / `remote.session`（Cordis 服务代理把 `this.ctx` 绑到调用方，

@@ -96,6 +96,8 @@ try {
 } catch {
   console.warn('缺少 assets/frame-24.webp，背景示意图将使用占位色块（先跑 scripts/fetch-frames.mjs）')
 }
+// 「背图 31」设置页的缩略图示例：直接用第 24 帧。
+const thumbSrc = frameImage === '' ? '' : `data:image/webp;base64,${frameImage}`
 
 const wallpaperLayers = frameImage === ''
   ? '<div class="ls-wallpaper ls-wallpaper-on" style="position:absolute;inset:0;z-index:0;background:linear-gradient(135deg,#3a6ea5,#b7791f)"></div>'
@@ -151,12 +153,22 @@ const shots = [
 
   ['03-settings-stage', page(`
     <p class="label">设置 · 按状态（6 条）</p>
-    ${markup({ expanded: true, view: 'settings', inline: true })}
+    ${markup({ expanded: true, view: 'settings', mode: 'stage', inline: true })}
   `, { width: 470 }), { width: 470 }],
 
   ['04-settings-frame', page(`
     <p class="label">设置 · 按档位（31 条，可逐档覆盖）</p>
-    ${markup({ expanded: true, view: 'settings', stageMode: false, inline: true })}
+    ${markup({ expanded: true, view: 'settings', mode: 'frame', inline: true })}
+  `, { width: 470 }), { width: 470 }],
+
+  ['06-settings-names', page(`
+    <p class="label">设置 · 名字（31 档可改名；相邻同名合并成一段）</p>
+    ${markup({ expanded: true, view: 'settings', mode: 'name', inline: true })}
+  `, { width: 470 }), { width: 470 }],
+
+  ['07-settings-images', page(`
+    <p class="label">设置 · 背图（31 档各挑一张，滑动时铺满窗口）</p>
+    ${markup({ expanded: true, view: 'settings', mode: 'image', thumb: thumbSrc, inline: true })}
   `, { width: 470 }), { width: 470 }],
 
   ['05-background', page(backgroundMock, { width: 700, background: '#0d1117' }), { width: 700 }],

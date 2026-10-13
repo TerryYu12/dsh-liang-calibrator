@@ -14,6 +14,21 @@ import {
   scoreOfFrame,
   stageIndexFor,
 } from './levels.js'
+import {
+  NAME_MAX_LENGTH,
+  displayNameAt,
+  nameRuns,
+  normalizeNames,
+  visibleRuns,
+} from './labels.js'
+import {
+  IMAGES_KEY,
+  compressImageFile,
+  galleryGC,
+  galleryGet,
+  galleryPut,
+  imageFileId,
+} from './gallery.js'
 import { styles } from './styles.js'
 
 /**
@@ -33,6 +48,7 @@ const WALLPAPER_HIDE_MS = 5000
 const WALLPAPER_FADE_MS = 320
 const ERROR_KEY = 'liang-calibrator:errors'
 const OVERRIDE_KEY = 'liang-calibrator:stages'
+const NAMES_KEY = 'liang-calibrator:names'
 const MAX_ERRORS = 8
 const POPOVER_WIDTH = 408
 
@@ -164,6 +180,64 @@ function writeOverrides(overrides) {
   }
 }
 
+/* --------------------------- 档位名字与自定义背图 --------------------------- */
+
+function readNames() {
+  try {
+    const raw = window.localStorage.getItem(NAMES_KEY)
+    return normalizeNames(raw === null ? [] : JSON.parse(raw))
+  } catch {
+    return normalizeNames([])
+  }
+}
+
+function writeNames(names) {
+  try {
+    window.localStorage.setItem(NAMES_KEY, JSON.stringify(normalizeNames(names)))
+  } catch {
+    // 存不下只影响持久化。
+  }
+}
+
+function readImageMap() {
+  try {
+    const raw = window.localStorage.getItem(IMAGES_KEY)
+    const parsed = raw === null ? [] : JSON.parse(raw)
+    return Array.from({ length: SCORE_COUNT }, (_, index) => {
+      const value = Array.isArray(parsed) ? parsed[index] : undefined
+      return typeof value === 'string' && value.trim() !== '' ? value.trim() : null
+    })
+  } catch {
+    return new Array(SCORE_COUNT).fill(null)
+  }
+}
+
+function writeImageMap(imageMap) {
+  try {
+    window.localStorage.setItem(IMAGES_KEY, JSON.stringify(imageMap))
+  } catch {
+    // 存不下只影响持久化。
+  }
+}
+
+/** 建 object URL；环境不支持时返回空串（调用方回退内置图）。 */
+function makeObjectUrl(blob) {
+  try {
+    if (typeof URL.createObjectURL !== 'function') return ''
+    return URL.createObjectURL(blob)
+  } catch {
+    return ''
+  }
+}
+
+function revokeObjectUrl(url) {
+  try {
+    if (url !== '' && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(url)
+  } catch {
+    // 撤销失败只影响内存。
+  }
+}
+
 /** 一条设置是否真的指定了路由（provider + model 都填了才算）。 */
 function overrideApplies(override) {
   return override !== null && override !== undefined
@@ -289,6 +363,10 @@ export function LiangCalibrator({ locked, available, directory, load, select }) 
   const [pending, setPending] = useState(null)
   const [actionError, setActionError] = useState(null)
   const [overrides, setOverrides] = useState(readOverrides)
+  const [names, setNames] = useState(readNames)
+  const [imageMap, setImageMap] = useState(readImageMap)
+  const [imageCacheTick, setImageCacheTick] = useState(0)
+  const [imageError, setImageError] = useState(null)
   const [expanded, setExpanded] = useState(false)
   const [view, setView] = useState('slider')
   const [settingsMode, setSettingsMode] = useState('stage')
@@ -299,6 +377,9 @@ export function LiangCalibrator({ locked, available, directory, load, select }) 
   const wallpaperRef = useRef(null)
   const wallpaperTimerRef = useRef(null)
   const restoreRef = useRef(null)
+  /** 图片 id → object URL 的缓存（页面会话内有效，卸载时统一撤销）。 */
+  const imageCacheRef = useRef(null)
+  if (imageCacheRef.current === null) imageCacheRef.current = new Map()
   const sliderId = useId()
   const listId = useId()
 
@@ -452,6 +533,49 @@ export function LiangCalibrator({ locked, available, directory, load, select }) 
     writeOverrides(overrides)
   }, [overrides])
 
+  useEffect(() => {
+    writeNames(names)
+  }, [names])
+
+  useEffect(() => {
+    writeImageMap(imageMap)
+  }, [imageMap])
+
+  // 自定义背图：加载已用到的图片、撤掉不再引用的 object URL、回收孤儿条目。
+  useEffect(() => {
+    let alive = true
+    const sync = async () => {
+      const wanted = new Set(imageMap.filter((id) => typeof id === 'string' && id !== ''))
+      let changed = false
+      for (const id of wanted) {
+        if (imageCacheRef.current.has(id)) continue
+        const blob = await galleryGet(id)
+        if (!alive) return
+        if (blob !== null && blob !== undefined) {
+          const url = makeObjectUrl(blob)
+          if (url !== '') {
+            imageCacheRef.current.set(id, url)
+            changed = true
+          }
+        }
+      }
+      for (const [id, url] of [...imageCacheRef.current]) {
+        if (wanted.has(id)) continue
+        revokeObjectUrl(url)
+        imageCacheRef.current.delete(id)
+        changed = true
+      }
+      if (changed) setImageCacheTick((tick) => tick + 1)
+      await galleryGC([...wanted])
+    }
+    sync().catch((error) => {
+      recordError(error, { kind: 'gallery/sync' })
+    })
+    return () => {
+      alive = false
+    }
+  }, [imageMap])
+
   // 外部改变模型时把滑杆移到对应区间。
   useEffect(() => {
     const current = state.current
@@ -511,19 +635,78 @@ export function LiangCalibrator({ locked, available, directory, load, select }) 
     }
   }, [expanded])
 
-  // 卸载时清掉背景图与定时器。
+  // 卸载时清掉背景图与定时器，并撤销自定义背图的 object URL。
   useEffect(() => () => {
     if (wallpaperTimerRef.current !== null) window.clearTimeout(wallpaperTimerRef.current)
     const restore = restoreRef.current
     if (restore !== null) restore()
     const layer = wallpaperRef.current
     if (layer !== null && layer.root.parentNode !== null) layer.root.parentNode.removeChild(layer.root)
+    for (const url of imageCacheRef.current.values()) revokeObjectUrl(url)
+    imageCacheRef.current = new Map()
   }, [])
 
   if (!available) return null
 
   const localFrame = frameIndexFor(score)
-  const stage = STAGES[stageIndexFor(localFrame)]
+  /** 当前档的显示名：自定义优先，否则回落默认梁名。 */
+  const stageName = displayNameAt(names, localFrame)
+  /** 该档要铺的背景图：自定义优先；图还没加载好时先用内置档位图兜底。 */
+  const urlForFrame = (frame) => {
+    const id = imageMap[frame]
+    const custom = id === null || id === undefined ? '' : imageCacheRef.current.get(id) ?? ''
+    return custom !== '' ? custom : FRAMES[frame]
+  }
+
+  const setNameAt = (frame, value) => {
+    setNames((current) => {
+      const next = [...current]
+      next[frame] = String(value).slice(0, NAME_MAX_LENGTH)
+      return next
+    })
+  }
+
+  /** 用户挑好图片：压缩 → 按内容哈希入库 → 记到该档。 */
+  const assignImage = async (frame, file) => {
+    setImageError(null)
+    try {
+      const prepared = await compressImageFile(file)
+      const id = await imageFileId(prepared.blob)
+      const stored = await galleryPut(id, prepared.blob)
+      if (!stored) throw new Error('图片存入本机失败')
+      const url = makeObjectUrl(prepared.blob)
+      if (url !== '') {
+        imageCacheRef.current.set(id, url)
+        setImageCacheTick((tick) => tick + 1)
+      }
+      setImageMap((current) => {
+        const next = [...current]
+        next[frame] = id
+        return next
+      })
+    } catch (error) {
+      const message = recordError(error, { kind: 'gallery/assign' })
+      setImageError(`第 ${formatSignedScore(scoreOfFrame(frame))} 档的背图没有保存：${message}`)
+    }
+  }
+
+  const clearImageAt = (frame) => {
+    setImageError(null)
+    setImageMap((current) => {
+      const next = [...current]
+      next[frame] = null
+      return next
+    })
+  }
+
+  /** 设置面板右上角的清空按钮：按当前粒度清路由 / 名字 / 背图。 */
+  const clearActiveSettings = () => {
+    if (settingsMode === 'name') setNames(normalizeNames([]))
+    else if (settingsMode === 'image') {
+      setImageMap(new Array(SCORE_COUNT).fill(null))
+      setImageError(null)
+    } else clearOverrides()
+  }
 
   /* ---- 滑动时把档位图铺成 DSH 背景，停手 5 秒后淡出 ---- */
   const hideWallpaper = () => {
@@ -540,7 +723,7 @@ export function LiangCalibrator({ locked, available, directory, load, select }) 
 
   const showWallpaper = (frame) => {
     const layer = ensureWallpaper(wallpaperRef)
-    const url = FRAMES[frame]
+    const url = urlForFrame(frame)
     if (layer.sharp.getAttribute('src') !== url) {
       layer.sharp.setAttribute('src', url)
       layer.blur.setAttribute('src', url)
@@ -586,7 +769,7 @@ export function LiangCalibrator({ locked, available, directory, load, select }) 
         : currentFrames.length > 0
           ? currentFrames[Math.floor(currentFrames.length / 2)]
           : -1
-  const chipStage = chipFrame >= 0 ? STAGES[stageIndexFor(chipFrame)] : null
+  const chipStage = chipFrame >= 0 ? displayNameAt(names, chipFrame) : null
   const chipCombo = chipFrame >= 0 ? ladder[chipFrame] : undefined
   const chipEntry = chipCombo === undefined ? undefined : entryFor(chipCombo)
   const fallback = state.current == null ? null : currentSelectionLabel(state.current, state)
@@ -727,18 +910,34 @@ export function LiangCalibrator({ locked, available, directory, load, select }) 
                 >
                   按档位 31
                 </button>
+                <button
+                  type="button"
+                  className={`ls-mode-btn${settingsMode === 'name' ? ' ls-mode-on' : ''}`}
+                  onClick={() => setSettingsMode('name')}
+                >
+                  名字 31
+                </button>
+                <button
+                  type="button"
+                  className={`ls-mode-btn${settingsMode === 'image' ? ' ls-mode-on' : ''}`}
+                  onClick={() => setSettingsMode('image')}
+                >
+                  背图 31
+                </button>
               </span>
             ) : (
               <span className="ls-popover-title">滑动变祖器</span>
             )}
             {view === 'settings' && (
-              <button type="button" className="ls-settings-clear" onClick={clearOverrides}>全部自动</button>
+              <button type="button" className="ls-settings-clear" onClick={clearActiveSettings}>
+                {settingsMode === 'name' ? '全部默认' : settingsMode === 'image' ? '全部内置' : '全部自动'}
+              </button>
             )}
             <button
               type="button"
               className={`ls-gear${view === 'settings' ? ' ls-gear-on' : ''}`}
               aria-label="档位设置"
-              title="档位设置：为每个状态或每一档指定 provider / 模型 / 思考强度"
+              title="档位设置：按状态 / 按档位指定路由，逐档改名与挑背图"
               onClick={() => setView((current) => current === 'settings' ? 'slider' : 'settings')}
             >
               <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
@@ -759,44 +958,78 @@ export function LiangCalibrator({ locked, available, directory, load, select }) 
 
           {view === 'settings' ? (
             <div className="ls-settings">
-              {settingsMode === 'stage'
-                ? STAGES.map((stageName, index) => {
-                    const override = overrides.stages[index]
-                    const hint = autoRoute(firstFrameOfStage(index))
-                    return (
-                      <SettingRow
-                        key={stageName}
-                        label={stageName}
-                        title={stageName}
-                        listId={listId}
-                        override={override}
-                        hint={hint}
-                        known={override?.provider === undefined || override.provider === '' || groups.some((group) => group.id === override.provider)}
-                        onChange={(patch) => updateOverride('stage', index, patch)}
-                      />
-                    )
-                  })
-                : Array.from({ length: SCORE_COUNT }, (_, frame) => {
-                    const override = overrides.frames[frame]
-                    const hint = autoRoute(frame)
-                    return (
-                      <SettingRow
-                        key={frame}
-                        label={formatSignedScore(scoreOfFrame(frame))}
-                        title={`${formatSignedScore(scoreOfFrame(frame))} · ${STAGES[stageIndexFor(frame)]}`}
-                        listId={listId}
-                        override={override}
-                        hint={hint}
-                        known={override?.provider === undefined || override.provider === '' || groups.some((group) => group.id === override.provider)}
-                        onChange={(patch) => updateOverride('frame', frame, patch)}
-                      />
-                    )
-                  })}
+              {settingsMode === 'stage' && STAGES.map((stageLabel, index) => {
+                const override = overrides.stages[index]
+                const hint = autoRoute(firstFrameOfStage(index))
+                return (
+                  <SettingRow
+                    key={stageLabel}
+                    label={stageLabel}
+                    title={stageLabel}
+                    listId={listId}
+                    override={override}
+                    hint={hint}
+                    known={override?.provider === undefined || override.provider === '' || groups.some((group) => group.id === override.provider)}
+                    onChange={(patch) => updateOverride('stage', index, patch)}
+                  />
+                )
+              })}
+              {settingsMode === 'frame' && Array.from({ length: SCORE_COUNT }, (_, frame) => {
+                const override = overrides.frames[frame]
+                const hint = autoRoute(frame)
+                const frameScore = formatSignedScore(scoreOfFrame(frame))
+                return (
+                  <SettingRow
+                    key={frame}
+                    label={frameScore}
+                    title={`${frameScore} · ${displayNameAt(names, frame)}`}
+                    listId={listId}
+                    override={override}
+                    hint={hint}
+                    known={override?.provider === undefined || override.provider === '' || groups.some((group) => group.id === override.provider)}
+                    onChange={(patch) => updateOverride('frame', frame, patch)}
+                  />
+                )
+              })}
+              {settingsMode === 'name' && Array.from({ length: SCORE_COUNT }, (_, frame) => {
+                const frameScore = formatSignedScore(scoreOfFrame(frame))
+                return (
+                  <NameRow
+                    key={frame}
+                    label={frameScore}
+                    title={`${frameScore} · ${STAGES[stageIndexFor(frame)]}`}
+                    placeholder={STAGES[stageIndexFor(frame)]}
+                    value={names[frame] ?? ''}
+                    onChange={(value) => setNameAt(frame, value)}
+                  />
+                )
+              })}
+              {settingsMode === 'image' && Array.from({ length: SCORE_COUNT }, (_, frame) => {
+                const frameScore = formatSignedScore(scoreOfFrame(frame))
+                const id = imageMap[frame]
+                const thumb = id === null || id === undefined ? '' : imageCacheRef.current.get(id) ?? ''
+                return (
+                  <ImageRow
+                    key={frame}
+                    label={frameScore}
+                    title={`${frameScore} · ${displayNameAt(names, frame)}`}
+                    thumbUrl={thumb}
+                    onPick={(file) => assignImage(frame, file)}
+                    onClear={() => clearImageAt(frame)}
+                  />
+                )
+              })}
+              {settingsMode === 'image' && imageError !== null && (
+                <p className="ls-settings-error" role="alert">{imageError}</p>
+              )}
               <p className="ls-settings-hint">
-                {settingsMode === 'stage'
-                  ? '六个状态各一条：填了 provider 与模型后，该状态内的每一档都用这条路由。'
-                  : '31 档逐档设置，优先于「按状态」的设置；灰色占位符是自动分档会选的模型。'}
-                {' '}三项都能直接填（provider / 模型 id / 思考强度 <code>off</code>、<code>high</code>、<code>max</code>…），留空即沿用上一层。
+                {settingsMode === 'stage' && '六个状态各一条：填了 provider 与模型后，该状态内的每一档都用这条路由。'}
+                {settingsMode === 'frame' && '31 档逐档设置，优先于「按状态」的设置；灰色占位符是自动分档会选的模型。'}
+                {settingsMode === 'name' && '给 31 档各起一个名字：留空用默认梁名；相邻档位写成同一个名字就合并成一段，滑杆下方的站名行会跟着变。'}
+                {settingsMode === 'image' && '给 31 档各挑一张自定义背图：滑动到该档时铺在窗口上，留空用内置档位图；图片只存本机（IndexedDB），同一张图给多个档位只存一份。'}
+                {settingsMode === 'stage' || settingsMode === 'frame' ? (
+                  <> {' '}三项都能直接填（provider / 模型 id / 思考强度 <code>off</code>、<code>high</code>、<code>max</code>…），留空即沿用上一层。</>
+                ) : null}
               </p>
             </div>
           ) : (
@@ -840,24 +1073,25 @@ export function LiangCalibrator({ locked, available, directory, load, select }) 
                   value={String(score)}
                   disabled={disabled}
                   aria-label="梁系强度（模型与推理等级）"
-                  aria-valuetext={`${stage} ${formatSignedScore(scoreOfFrame(localFrame))} ${routeLabel}`}
+                  aria-valuetext={`${stageName} ${formatSignedScore(scoreOfFrame(localFrame))} ${routeLabel}`}
                   onChange={onInput}
                 />
               </div>
 
               <div className="ls-stations" aria-hidden="true">
-                {STAGES.map((stageName, index) => {
-                  const combo = ladder[firstFrameOfStage(index)]
+                {visibleRuns(nameRuns(names), localFrame).map((run) => {
+                  const combo = ladder[run.start]
                   const entry = entryFor(combo)
                   const available1 = combo?.provider !== undefined
                     || (entry?.group !== undefined && entry.model !== undefined)
                   return (
                     <span
-                      key={stageName}
-                      className={`ls-station${stageIndexFor(localFrame) === index ? ' ls-station-active' : ''}`}
+                      key={`${run.start}-${run.end}`}
+                      className={`ls-station${run.active ? ' ls-station-active' : ''}`}
                       data-available={available1 ? 'true' : 'false'}
+                      style={{ left: `calc(30px + (100% - 60px) * ${run.center.toFixed(4)})` }}
                     >
-                      {stageName}
+                      {run.name}
                     </span>
                   )
                 })}
@@ -906,6 +1140,52 @@ function SettingRow({ label, title, listId, override, hint, known, onChange }) {
         value={override?.effort ?? ''}
         onChange={(event) => onChange({ effort: event.target.value })}
       />
+    </div>
+  )
+}
+
+/** 设置里的一行：「名字 31」——单输入框，占位符是默认梁名。 */
+function NameRow({ label, title, placeholder, value, onChange }) {
+  return (
+    <div className="ls-settings-row ls-settings-row-name" title={title}>
+      <span className="ls-settings-stage">{label}</span>
+      <input
+        className="ls-settings-input"
+        aria-label={`${title} 的名字`}
+        placeholder={placeholder}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </div>
+  )
+}
+
+/** 设置里的一行：「背图 31」——缩略图 + 选图 + 清除。 */
+function ImageRow({ label, title, thumbUrl, onPick, onClear }) {
+  const filled = typeof thumbUrl === 'string' && thumbUrl !== ''
+  return (
+    <div className="ls-settings-row ls-settings-row-image" title={title} data-filled={filled ? 'true' : 'false'}>
+      <span className="ls-settings-stage">{label}</span>
+      {filled
+        ? <img className="ls-settings-thumb" src={thumbUrl} alt="" draggable={false} />
+        : <span className="ls-settings-empty">内置</span>}
+      <label className="ls-settings-btn">
+        选择图片
+        <input
+          type="file"
+          accept="image/*"
+          className="ls-settings-file"
+          aria-label={`${title} 的背图`}
+          onChange={(event) => {
+            const file = event.target.files?.[0]
+            event.target.value = ''
+            if (file !== undefined && file !== null) onPick(file)
+          }}
+        />
+      </label>
+      <button type="button" className="ls-settings-btn ls-settings-btn-clear" onClick={onClear} disabled={!filled}>
+        清除
+      </button>
     </div>
   )
 }

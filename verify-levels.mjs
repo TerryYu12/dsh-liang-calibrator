@@ -1,5 +1,6 @@
 // 校验 31 档映射与梯子生成（把构建期注入的 __LIANG_IMG_n__ 占位符替换为空串后直接跑源码）。
 import { readFile, writeFile, rm } from 'node:fs/promises'
+import { build } from 'esbuild'
 
 const src = await readFile('./src/levels.js', 'utf8')
 const patched = src.replace(/__LIANG_IMG_\d+__/gu, '""')
@@ -85,6 +86,77 @@ const legacy = m.buildLadder(['deepseek-flash', 'deepseek-v4-pro'], () => ['off'
 eq(combos(legacy).size, 6, '三个等级时 6 种组合')
 eq(legacy[0].effort, 'off', 'legacy[0]')
 eq(legacy[30].effort, 'max', 'legacy[30]')
+
+// 名字分段与背图映射的纯逻辑：labels.js 经 esbuild 注入图片占位符后加载。
+await rm('./.pure.test', { recursive: true, force: true })
+await build({
+  entryPoints: ['./src/labels.js', './src/gallery.js'],
+  outdir: './.pure.test',
+  bundle: true,
+  format: 'esm',
+  platform: 'node',
+  logLevel: 'warning',
+  define: Object.fromEntries(
+    Array.from({ length: 31 }, (_, index) => [`__LIANG_IMG_${index}__`, JSON.stringify('')]),
+  ),
+})
+const labels = await import('./.pure.test/labels.js')
+const gallery = await import('./.pure.test/gallery.js')
+await rm('./.pure.test', { recursive: true, force: true })
+
+const defaults = labels.defaultNames()
+eq(defaults.length, 31, 'defaultNames.length')
+eq(defaults[0], '小难梁', 'defaultNames[0]')
+eq(defaults[5], '小难梁', 'defaultNames[5]')
+eq(defaults[6], '牢梁', 'defaultNames[6]')
+eq(defaults[29], '梁神', 'defaultNames[29]')
+eq(defaults[30], '梁祖', 'defaultNames[30]')
+
+const defaultRuns = labels.nameRuns([])
+eq(defaultRuns.length, 6, '默认名字应分成 6 段')
+eq(defaultRuns[0].start, 0, '第一段起于帧 0')
+eq(defaultRuns[0].end, 5, '第一段止于帧 5')
+eq(defaultRuns[5].start, 30, '最后一段起于帧 30')
+eq(labels.runCenter({ start: 0, end: 30 }), 0.5, 'runCenter 全段居中')
+eq(labels.runCenter({ start: 30, end: 30 }), 1, 'runCenter 末帧到端点')
+eq(labels.displayNameAt([], 28), '梁神', 'displayNameAt 回落默认梁名')
+
+// 相邻同名合并：+14/+15 都叫「梁帝」→ 合成一段；跨段同名不合并。
+const merged = labels.normalizeNames(defaults)
+merged[29] = '梁帝'
+merged[30] = '梁帝'
+const mergedRuns = labels.nameRuns(merged)
+eq(mergedRuns.length, 6, '合并后仍是 6 段')
+eq(mergedRuns[5].start, 29, '合并段起于帧 29')
+eq(mergedRuns[5].end, 30, '合并段止于帧 30')
+eq(labels.displayNameAt(merged, 30), '梁帝', 'displayNameAt 自定义优先')
+
+const split = labels.normalizeNames(defaults)
+split[28] = '梁帝'
+eq(labels.nameRuns(split).length, 8, '28 与 29 同名但不相邻（29 仍是梁神）→ 不合并，共 8 段')
+
+// 规整规则。
+eq(labels.normalizeNames(['  梁帝  '])[0], '梁帝', 'normalizeNames 去首尾空格')
+eq(labels.normalizeNames([123])[0], '', 'normalizeNames 非字符串按空处理')
+eq(labels.normalizeNames(['x'.repeat(80)])[0].length, labels.NAME_MAX_LENGTH, 'normalizeNames 截断过长')
+eq(labels.normalizeNames(null).length, 31, 'normalizeNames 长度恒为 31')
+
+// 标签密度：默认全可见；31 个不同名时省略，但当前档必须保留。
+eq(labels.visibleRuns(defaultRuns, 0).length, 6, '默认名字应全部可见')
+const denseRuns = labels.nameRuns(labels.normalizeNames(Array.from({ length: 31 }, (_, index) => `档${index}`)))
+eq(denseRuns.length, 31, '31 个不同名 = 31 段')
+const denseVisible = labels.visibleRuns(denseRuns, 4)
+ok(denseVisible.length < 31 && denseVisible.length > 3, `密集名字应省略一部分，实际 ${denseVisible.length}`)
+ok(denseVisible.some((run) => run.active && run.start <= 4 && run.end >= 4), '当前档的标签必须保留')
+ok(labels.visibleRuns(denseRuns, 30).some((run) => run.active && run.end === 30), '末档的标签必须保留')
+
+// 背图映射的规整。
+eq(gallery.normalizeImageMap([]).length, 31, 'normalizeImageMap 长度恒为 31')
+ok(gallery.normalizeImageMap([]).every((id) => id === null), '空输入全是 null')
+eq(gallery.normalizeImageMap([' a ', '', 5])[0], 'a', 'normalizeImageMap 去空格')
+eq(gallery.normalizeImageMap([' a ', '', 5])[1], null, 'normalizeImageMap 空串 → null')
+eq(gallery.normalizeImageMap([' a ', '', 5])[2], null, 'normalizeImageMap 非字符串 → null')
+eq(gallery.MAX_EDGE, 1920, 'MAX_EDGE')
 
 if (fail.length > 0) {
   console.error(`FAILED (${fail.length}):\n` + fail.join('\n'))

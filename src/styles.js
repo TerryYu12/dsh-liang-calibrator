@@ -215,6 +215,84 @@ export const styles = String.raw`
   gap: 5px;
 }
 
+/* 名字行：分值 + 单输入框。 */
+.ls-settings-row-name {
+  grid-template-columns: 40px minmax(0, 1fr);
+}
+
+/* 背图行：分值 + 缩略图 + 选图 + 清除。 */
+.ls-settings-row-image {
+  grid-template-columns: 40px 46px minmax(0, 1fr) 40px;
+}
+
+.ls-settings-thumb {
+  width: 44px;
+  height: 25px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.04);
+  object-fit: cover;
+}
+
+.ls-settings-empty {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 25px;
+  border: 1px dashed var(--dsw-alias-border-l2);
+  border-radius: 5px;
+  color: var(--dsw-alias-label-caption);
+  font-size: 9px;
+  line-height: 1;
+}
+
+.ls-settings-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  padding: 3px 4px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+  background: transparent;
+  color: rgb(89, 188, 255);
+  font-size: 9.5px;
+  line-height: 15px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ls-settings-btn:hover {
+  background: rgba(21, 128, 219, 0.16);
+}
+
+.ls-settings-btn:disabled {
+  color: var(--dsw-alias-label-caption);
+  opacity: 0.45;
+  cursor: default;
+}
+
+.ls-settings-btn:disabled:hover {
+  background: transparent;
+}
+
+/* 真正的 file input 铺满按钮，点击一律交给它（用户手势直接触发选择框）。 */
+.ls-settings-file {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.ls-settings-error {
+  margin: 2px 0 0;
+  color: var(--dsw-alias-state-error-primary, rgb(255, 107, 107));
+  font-size: 9.5px;
+  line-height: 14px;
+}
+
 .ls-settings-row[data-unknown='true'] .ls-settings-input {
   border-color: rgba(226, 168, 78, 0.55);
 }
@@ -625,22 +703,24 @@ export const styles = String.raw`
   background: rgba(226, 168, 78, 0.16);
 }
 
-/* 六个状态标签：与原项目一致，沿轨道均匀分布并以标签中心对齐刻度点。 */
+/* 站名行：标签按所属档位段居中（与滑片同一轨道坐标），挤不下时省略，当前段永远保留。 */
 .ls-stations {
-  display: flex;
-  justify-content: space-between;
+  position: relative;
   box-sizing: border-box;
   height: 13px;
-  padding: 0 16px;
 }
 
 .ls-station {
-  width: 0;
+  position: absolute;
+  top: 0;
+  max-width: 76px;
+  overflow: hidden;
   color: var(--dsw-alias-label-caption);
   font-size: 9.5px;
   line-height: 12px;
   text-align: center;
   white-space: nowrap;
+  text-overflow: ellipsis;
   transform: translateX(-50%);
 }
 
