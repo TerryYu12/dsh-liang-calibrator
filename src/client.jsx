@@ -365,8 +365,10 @@ export function LiangCalibrator({ locked, available, directory, load, select }) 
   const [overrides, setOverrides] = useState(readOverrides)
   const [names, setNames] = useState(readNames)
   const [imageMap, setImageMap] = useState(readImageMap)
-  const [imageCacheTick, setImageCacheTick] = useState(0)
+  // 图片缓存变动只用来触发重渲染（值本身不读）。
+  const [, setImageCacheTick] = useState(0)
   const [imageError, setImageError] = useState(null)
+  const [imageNotice, setImageNotice] = useState(null)
   const [expanded, setExpanded] = useState(false)
   const [view, setView] = useState('slider')
   const [settingsMode, setSettingsMode] = useState('stage')
@@ -380,6 +382,8 @@ export function LiangCalibrator({ locked, available, directory, load, select }) 
   /** 图片 id → object URL 的缓存（页面会话内有效，卸载时统一撤销）。 */
   const imageCacheRef = useRef(null)
   if (imageCacheRef.current === null) imageCacheRef.current = new Map()
+  /** 组件是否还在树上：异步的图片入库回来时用来决定「放入缓存」还是「直接撤销」。 */
+  const aliveRef = useRef(true)
   const sliderId = useId()
   const listId = useId()
 
@@ -559,12 +563,14 @@ export function LiangCalibrator({ locked, available, directory, load, select }) 
           }
         }
       }
+      if (!alive) return
       for (const [id, url] of [...imageCacheRef.current]) {
         if (wanted.has(id)) continue
         revokeObjectUrl(url)
         imageCacheRef.current.delete(id)
         changed = true
       }
+      if (!alive) return
       if (changed) setImageCacheTick((tick) => tick + 1)
       await galleryGC([...wanted])
     }
@@ -636,14 +642,18 @@ export function LiangCalibrator({ locked, available, directory, load, select }) 
   }, [expanded])
 
   // 卸载时清掉背景图与定时器，并撤销自定义背图的 object URL。
-  useEffect(() => () => {
-    if (wallpaperTimerRef.current !== null) window.clearTimeout(wallpaperTimerRef.current)
-    const restore = restoreRef.current
-    if (restore !== null) restore()
-    const layer = wallpaperRef.current
-    if (layer !== null && layer.root.parentNode !== null) layer.root.parentNode.removeChild(layer.root)
-    for (const url of imageCacheRef.current.values()) revokeObjectUrl(url)
-    imageCacheRef.current = new Map()
+  useEffect(() => {
+    aliveRef.current = true
+    return () => {
+      aliveRef.current = false
+      if (wallpaperTimerRef.current !== null) window.clearTimeout(wallpaperTimerRef.current)
+      const restore = restoreRef.current
+      if (restore !== null) restore()
+      const layer = wallpaperRef.current
+      if (layer !== null && layer.root.parentNode !== null) layer.root.parentNode.removeChild(layer.root)
+      for (const url of imageCacheRef.current.values()) revokeObjectUrl(url)
+      imageCacheRef.current.clear()
+    }
   }, [])
 
   if (!available) return null
@@ -669,15 +679,22 @@ export function LiangCalibrator({ locked, available, directory, load, select }) 
   /** 用户挑好图片：压缩 → 按内容哈希入库 → 记到该档。 */
   const assignImage = async (frame, file) => {
     setImageError(null)
+    setImageNotice(null)
     try {
       const prepared = await compressImageFile(file)
       const id = await imageFileId(prepared.blob)
       const stored = await galleryPut(id, prepared.blob)
-      if (!stored) throw new Error('图片存入本机失败')
+      if (!stored.ok) throw new Error('图片没有存上')
       const url = makeObjectUrl(prepared.blob)
-      if (url !== '') {
+      if (url !== '' && aliveRef.current) {
         imageCacheRef.current.set(id, url)
         setImageCacheTick((tick) => tick + 1)
+      } else if (url !== '') {
+        revokeObjectUrl(url)
+      }
+      if (!aliveRef.current) return
+      if (!stored.persisted) {
+        setImageNotice('本机存储不可用：这张图只在本次会话有效，刷新后会回到内置图。')
       }
       setImageMap((current) => {
         const next = [...current]
@@ -692,6 +709,7 @@ export function LiangCalibrator({ locked, available, directory, load, select }) 
 
   const clearImageAt = (frame) => {
     setImageError(null)
+    setImageNotice(null)
     setImageMap((current) => {
       const next = [...current]
       next[frame] = null
@@ -705,6 +723,7 @@ export function LiangCalibrator({ locked, available, directory, load, select }) 
     else if (settingsMode === 'image') {
       setImageMap(new Array(SCORE_COUNT).fill(null))
       setImageError(null)
+      setImageNotice(null)
     } else clearOverrides()
   }
 
@@ -1022,6 +1041,9 @@ export function LiangCalibrator({ locked, available, directory, load, select }) 
               {settingsMode === 'image' && imageError !== null && (
                 <p className="ls-settings-error" role="alert">{imageError}</p>
               )}
+              {settingsMode === 'image' && imageNotice !== null && (
+                <p className="ls-settings-note">{imageNotice}</p>
+              )}
               <p className="ls-settings-hint">
                 {settingsMode === 'stage' && '六个状态各一条：填了 provider 与模型后，该状态内的每一档都用这条路由。'}
                 {settingsMode === 'frame' && '31 档逐档设置，优先于「按状态」的设置；灰色占位符是自动分档会选的模型。'}
@@ -1080,10 +1102,15 @@ export function LiangCalibrator({ locked, available, directory, load, select }) 
 
               <div className="ls-stations" aria-hidden="true">
                 {visibleRuns(nameRuns(names), localFrame).map((run) => {
-                  const combo = ladder[run.start]
-                  const entry = entryFor(combo)
-                  const available1 = combo?.provider !== undefined
-                    || (entry?.group !== undefined && entry.model !== undefined)
+                  let available1 = false
+                  for (let frame = run.start; frame <= run.end; frame += 1) {
+                    const combo = ladder[frame]
+                    const entry = entryFor(combo)
+                    if (combo?.provider !== undefined || (entry?.group !== undefined && entry.model !== undefined)) {
+                      available1 = true
+                      break
+                    }
+                  }
                   return (
                     <span
                       key={`${run.start}-${run.end}`}

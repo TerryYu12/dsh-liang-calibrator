@@ -100,17 +100,24 @@ export async function galleryGet(id) {
   }
 }
 
-/** 存一张图（同 id 覆盖）。返回是否成功。 */
+/**
+ * 存一张图（同 id 覆盖）。
+ * 返回 { ok, persisted }：ok=false 仅参数异常；persisted=false 表示只进了内存
+ * （IndexedDB 不可用或写失败，刷新即失）——调用方要如实提示，不许假装已持久化。
+ */
 export async function galleryPut(id, blob) {
-  if (typeof id !== 'string' || id === '' || blob === null || blob === undefined) return false
+  if (typeof id !== 'string' || id === '' || blob === null || blob === undefined) {
+    return { ok: false, persisted: false }
+  }
   memory.set(id, blob)
   try {
     const db = await openDb()
-    if (db === null) return true
-    const ok = await withStore('readwrite', (store) => store.put(blob, id))
-    return true
+    if (db === null) return { ok: true, persisted: false }
+    const stored = await withStore('readwrite', (store) => store.put(blob, id))
+    if (stored === null || stored === undefined) return { ok: true, persisted: false }
+    return { ok: true, persisted: true }
   } catch {
-    return true
+    return { ok: true, persisted: false }
   }
 }
 

@@ -595,6 +595,7 @@ async function mount(snapshot, props = {}, { expand = true } = {}) {
   const storedImages = JSON.parse(dom.window.localStorage.getItem('liang-calibrator:images') ?? 'null')
   check(typeof storedImages?.[30] === 'string' && storedImages[30] !== '', `背图映射应持久化，实际 ${JSON.stringify(storedImages?.[30])}`)
   check(container.querySelectorAll('.ls-settings-row-image')[30].querySelector('.ls-settings-thumb') !== null, '指定后应显示缩略图')
+  check(container.querySelector('.ls-settings-note') !== null, '无 IndexedDB 时应如实提示「只在本会话有效」')
 
   await click(container.querySelector('.ls-gear'))
   const rangeInput = container.querySelector('input.ls-range')

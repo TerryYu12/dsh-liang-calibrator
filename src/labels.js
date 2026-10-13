@@ -23,9 +23,9 @@ export function normalizeNames(raw) {
   })
 }
 
-/** 第 frame 档的显示名：自定义名优先，否则回落到默认梁名。 */
+/** 第 frame 档的显示名：自定义名优先，否则回落到默认梁名。非有限数按首档处理。 */
 export function displayNameAt(names, frame) {
-  const index = Math.min(SCORE_COUNT - 1, Math.max(0, Math.trunc(frame)))
+  const index = Number.isFinite(frame) ? Math.min(SCORE_COUNT - 1, Math.max(0, Math.trunc(frame))) : 0
   const custom = Array.isArray(names) ? names[index] : undefined
   if (typeof custom === 'string' && custom.trim() !== '') return custom.trim()
   return STAGES[stageIndexFor(index)]
@@ -66,11 +66,20 @@ function estimateLabelWidth(name) {
 export function visibleRuns(runs, activeFrame, trackPx = TRACK_PX) {
   const visible = []
   let lastRight = null
+  const rightEdgeOf = (entry) => entry.center * trackPx + estimateLabelWidth(entry.name) / 2
   for (const run of runs) {
     const center = runCenter(run) * trackPx
     const half = estimateLabelWidth(run.name) / 2
     const isActive = activeFrame >= run.start && activeFrame <= run.end
-    const fits = lastRight === null || center - half - lastRight >= LABEL_GAP_PX
+    let fits = lastRight === null || center - half - lastRight >= LABEL_GAP_PX
+    if (!fits && isActive) {
+      // 当前档永远保留：从右往左丢掉与它重叠的已放置标签，为它腾出位置。
+      while (visible.length > 0 && rightEdgeOf(visible[visible.length - 1]) + LABEL_GAP_PX > center - half) {
+        visible.pop()
+      }
+      lastRight = visible.length === 0 ? null : rightEdgeOf(visible[visible.length - 1])
+      fits = lastRight === null || center - half - lastRight >= LABEL_GAP_PX
+    }
     if (!fits && !isActive) continue
     visible.push({ start: run.start, end: run.end, name: run.name, center: runCenter(run), active: isActive })
     lastRight = Math.max(lastRight ?? Number.NEGATIVE_INFINITY, center + half)

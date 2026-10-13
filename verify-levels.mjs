@@ -149,6 +149,20 @@ const denseVisible = labels.visibleRuns(denseRuns, 4)
 ok(denseVisible.length < 31 && denseVisible.length > 3, `密集名字应省略一部分，实际 ${denseVisible.length}`)
 ok(denseVisible.some((run) => run.active && run.start <= 4 && run.end >= 4), '当前档的标签必须保留')
 ok(labels.visibleRuns(denseRuns, 30).some((run) => run.active && run.end === 30), '末档的标签必须保留')
+eq(labels.displayNameAt([], Number.NaN), '小难梁', 'displayNameAt 非有限数回落到首档')
+
+// 腾位逻辑：当前档插进来时，可见标签两两不得重叠（宽度按站名行 9.5px 字号估算，与实现同式）。
+const labelWidth = (name) => Math.min(76, [...String(name)].length * 9.5 + 6)
+for (const active of [0, 5, 15, 20, 30]) {
+  const visible = labels.visibleRuns(denseRuns, active)
+  let spaced = true
+  for (let i = 1; i < visible.length; i += 1) {
+    const gap = (visible[i].center - visible[i - 1].center) * 328
+      - labelWidth(visible[i].name) / 2 - labelWidth(visible[i - 1].name) / 2
+    if (gap < 4.5) spaced = false
+  }
+  ok(spaced, `active=${active} 时可见标签不应重叠：${visible.map((run) => run.name).join('/')}`)
+}
 
 // 背图映射的规整。
 eq(gallery.normalizeImageMap([]).length, 31, 'normalizeImageMap 长度恒为 31')

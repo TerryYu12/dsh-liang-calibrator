@@ -293,6 +293,14 @@ export const styles = String.raw`
   line-height: 14px;
 }
 
+/* 非致命提示（如：本机存储不可用，背图只在本会话有效）。 */
+.ls-settings-note {
+  margin: 2px 0 0;
+  color: var(--dsw-alias-label-caption);
+  font-size: 9.5px;
+  line-height: 14px;
+}
+
 .ls-settings-row[data-unknown='true'] .ls-settings-input {
   border-color: rgba(226, 168, 78, 0.55);
 }
