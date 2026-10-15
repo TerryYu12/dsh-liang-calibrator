@@ -464,14 +464,20 @@ async function mount(snapshot, props = {}, { expand = true } = {}) {
     `设置应持久化，实际 ${JSON.stringify(stored?.stages?.[0])}`)
   check(rows[0].dataset.unknown === 'true', '目录里没有的 provider 应标记为未知')
 
-  // 回到滑杆视图，拖到该状态区间应提交手填的路由。
+  // 回到滑杆视图，拖到该状态区间：目录里没有这条路由，默认拦下并给「仍要使用」。
   await click(container.querySelector('.ls-gear'))
   const input = container.querySelector('input.ls-range')
   await typeInto(input, '-13')
+  check(dir.selections.length === 0, `目录里没有的路由默认不应提交，实际 ${JSON.stringify(dir.selections)}`)
+  check((container.textContent ?? '').includes('当前没有公布任何模型'), `应说明拦下的原因，实际：${container.textContent}`)
+
+  const force = container.querySelector('.ls-force')
+  check(force !== null, '应提供「仍要使用」放行入口')
+  await click(force)
   const submitted = dir.selections.at(-1)
-  check(submitted?.provider === 'my-api', `应提交手填的 provider，实际 ${JSON.stringify(submitted)}`)
-  check(submitted?.model === 'vendor/model-x', `应提交手填的模型，实际 ${submitted?.model}`)
-  check(submitted?.reasoningEffort === 'max', `应提交手填的强度，实际 ${submitted?.reasoningEffort}`)
+  check(submitted?.provider === 'my-api', `放行后应提交手填的 provider，实际 ${JSON.stringify(submitted)}`)
+  check(submitted?.model === 'vendor/model-x', `放行后应提交手填的模型，实际 ${submitted?.model}`)
+  check(submitted?.reasoningEffort === 'max', `放行后应提交手填的强度，实际 ${submitted?.reasoningEffort}`)
 
   // 全部自动。
   await click(container.querySelector('.ls-gear'))
@@ -511,6 +517,10 @@ async function mount(snapshot, props = {}, { expand = true } = {}) {
   await click(container.querySelector('.ls-gear'))
   const input = container.querySelector('input.ls-range')
   await typeInto(input, '15')
+  check(dir.selections.length === 0, '目录里没有的路由默认拦下')
+  const force = container.querySelector('.ls-force')
+  check(force !== null, '逐档覆盖被拦下时也应给「仍要使用」')
+  await click(force)
   const top = dir.selections.at(-1)
   check(top?.provider === 'my-api' && top?.model === 'only-top' && top?.reasoningEffort === 'max',
     `+15 应使用逐档覆盖，实际 ${JSON.stringify(top)}`)
@@ -671,6 +681,57 @@ async function mount(snapshot, props = {}, { expand = true } = {}) {
   check(effort === undefined || ['off', 'low', 'high', 'max'].includes(effort), `修回不应带非法等级，实际 ${effort}`)
   check(typeof submitted?.model === 'string' && submitted.model !== '', `修回应带模型，实际 ${JSON.stringify(submitted)}`)
   console.log('scenario 23 (unroutable repair):', JSON.stringify(submitted))
+}
+
+// 24) 同一个模型被两个 provider 公布：梯子必须沿用当前选择所在的 provider，
+//     不能因为"第一个分组"就把用户悄悄换到另一个（哪怕那个没密钥，请求时才报 MISSING_CREDENTIAL）。
+{
+  const twoProviders = {
+    ...CATALOG,
+    current: { provider: 'deepseek-account', model: 'deepseek-flash', reasoningEffort: 'low' },
+    groups: [
+      { id: 'deepseek-official', models: [model('deepseek-flash', 'DeepSeek-V41-Flash')] },   // 排在前面的那个
+      { id: 'deepseek-account', models: [model('deepseek-flash', 'DeepSeek-V41-Flash'), model('deepseek-v4-pro', 'DeepSeek-V4-Pro')] },
+    ],
+  }
+  const { container, dir } = await mount(twoProviders)
+  await typeInto(container.querySelector('input.ls-range'), '-12')
+  const submitted = dir.selections.at(-1)
+  check(submitted?.provider === 'deepseek-account', `应沿用当前 provider，实际 ${JSON.stringify(submitted)}`)
+  console.log('scenario 24 (duplicate model id):', JSON.stringify(submitted))
+}
+
+// 25) 手填档位的 provider 当前公布不出模型（掉线/没密钥）：不许写进会话，并说明原因。
+{
+  const { container, dir } = await mount(CATALOG)
+  await click(container.querySelector('.ls-gear'))
+  await click(container.querySelectorAll('.ls-mode-btn')[1])       // 按档位 31
+  const row = container.querySelectorAll('.ls-settings-row')[30]   // +15
+  const inputs = row.querySelectorAll('input')
+  await typeInto(inputs[0], 'ghost-api')                           // 目录里根本没有这个 provider
+  await typeInto(inputs[1], 'ghost-model')
+  await typeInto(inputs[2], 'max')
+  check(row.dataset.unknown === 'true', '未知 provider 的设置行应被标记')
+
+  await click(container.querySelector('.ls-gear'))
+  await typeInto(container.querySelector('input.ls-range'), '15')
+  check(dir.selections.length === 0, `provider 不在目录时不应提交，实际 ${JSON.stringify(dir.selections)}`)
+  check((container.textContent ?? '').includes('当前没有公布任何模型'), `应说明原因，实际：${container.textContent}`)
+  console.log('scenario 25 (offline provider override): ok')
+}
+
+// 26) 目录里带着 provider 失败原因时（例如没密钥），提示要把它带出来。
+{
+  const { container } = await mount({
+    ...CATALOG,
+    current: { provider: 'ghost-api', model: 'ghost-model' },
+    routable: false,
+    failures: [{ id: 'ghost-api', name: 'Ghost', message: 'no API key for provider route "ghost-api"' }],
+  })
+  const text = container.textContent ?? ''
+  check(text.includes('当前模型不可用'), `应提示不可用，实际：${text}`)
+  check(text.includes('no API key'), `应带出宿主给的失败原因，实际：${text}`)
+  console.log('scenario 26 (failure reason surfaced): ok')
 }
 
 await rm('./.client.test.cjs', { force: true })

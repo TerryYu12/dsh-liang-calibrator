@@ -372,6 +372,7 @@ export function LiangCalibrator({ locked, available, directory, load, select }) 
   const [expanded, setExpanded] = useState(false)
   const [view, setView] = useState('slider')
   const [settingsMode, setSettingsMode] = useState('stage')
+  const [forceFrame, setForceFrame] = useState(null)
   const [anchor, setAnchor] = useState(null)
   const rootRef = useRef(null)
   const triggerRef = useRef(null)
@@ -388,17 +389,25 @@ export function LiangCalibrator({ locked, available, directory, load, select }) 
   const listId = useId()
 
   const groups = state.groups ?? []
+  /** 目录里加载失败的 provider（例如没有密钥、端点不通）。 */
+  const failures = state.failures ?? []
 
   // 自动梯子用的"模型分档"落点（MODEL_TIERS 顺序即强度顺序）。
+  //
+  // 同一个模型 id 可能同时被多个 provider 公布（deepseek-official 与 deepseek-account 都公布
+  // deepseek-flash）。这里**优先沿用当前选择所在的 provider**：否则滑一下就会被悄悄换到另一个
+  // provider —— 哪怕那个 provider 其实没有密钥（目录照常公布模型，请求时才报 MISSING_CREDENTIAL）。
   const tierEntries = useMemo(() => {
     const table = new Map()
+    const currentProvider = state.current?.provider
     for (const modelId of MODEL_TIERS) {
-      const group = groups.find((g) => g.models.some((m) => m.id === modelId))
+      const candidates = groups.filter((g) => g.models.some((m) => m.id === modelId))
+      const group = candidates.find((g) => g.id === currentProvider) ?? candidates[0]
       const model = group?.models.find((m) => m.id === modelId)
       table.set(modelId, { group, model })
     }
     return table
-  }, [groups])
+  }, [groups, state.current?.provider])
 
   const activeTiers = useMemo(
     () => MODEL_TIERS.filter((modelId) => tierEntries.get(modelId)?.group !== undefined),
@@ -502,19 +511,47 @@ export function LiangCalibrator({ locked, available, directory, load, select }) 
     return efforts.length === 0 ? false : efforts.includes(effort)
   }
 
+  /**
+   * 提交前的可用性校验：手填的 provider / 模型必须**当前真的在目录里**。
+   *
+   * 这条是线上事故的直接原因：给某几档指定了 `cmd`，之后那个 provider 因为改端点/丢密钥
+   * 而公布不出模型，插件照样把 `cmd/...` 写进会话 —— 宿主接受写入，但之后每次发送都被
+   * `session/model-unavailable` 拒绝。所以宁可当场拒绝提交并把原因说清楚。
+   *
+   * 自动分档（没有显式 provider）不校验：它的落点本来就来自目录。
+   */
+  const availabilityProblem = (combo) => {
+    if (combo === undefined || combo.provider === undefined) return null
+    const group = groups.find((g) => g.id === combo.provider)
+    const failure = failures.find((item) => item.id === combo.provider)
+    if (group === undefined) {
+      return failure === undefined
+        ? `${combo.provider} 当前没有公布任何模型`
+        : `${combo.provider} 当前不可用：${failure.message}`
+    }
+    if (!group.models.some((m) => m.id === combo.modelId)) {
+      return `${combo.provider} 里没有模型「${combo.modelId}」`
+    }
+    return null
+  }
+
+  /** 一档能否安全提交（目录里查得到 + 等级合法）。 */
+  const frameUsable = (frame) => {
+    const combo = ladder[frame]
+    if (combo === undefined) return false
+    if (availabilityProblem(combo) !== null) return false
+    if (effortProblem(combo) !== null) return false
+    if (combo.provider !== undefined) return true
+    const entry = entryFor(combo)
+    return entry?.group !== undefined && entry.model !== undefined
+  }
+
   /** 从某一档向外找最近一条"目录里确实可提交"的档位。 */
   const nearestUsableFrame = (from) => {
     for (let step = 0; step < SCORE_COUNT; step += 1) {
       for (const frame of [from + step, from - step]) {
         if (frame < 0 || frame >= SCORE_COUNT) continue
-        const combo = ladder[frame]
-        if (combo === undefined) continue
-        if (combo.provider !== undefined) {
-          if (effortProblem(combo) === null) return frame
-          continue
-        }
-        const entry = entryFor(combo)
-        if (entry?.group !== undefined && entry.model !== undefined && effortProblem(combo) === null) return frame
+        if (frameUsable(frame)) return frame
       }
     }
     return null
@@ -891,6 +928,14 @@ export function LiangCalibrator({ locked, available, directory, load, select }) 
   const wiperPercent = ((score - MIN_SCORE) / (MAX_SCORE - MIN_SCORE)) * 100
   // 宿主明确说"当前选择不在可用目录里"：这是发送会被拒的状态，必须显眼提示并给自救入口。
   const unroutable = state.routable === false && state.current != null
+  // 尽量把"为什么不可用"说清楚：优先用目录里这个 provider 的失败原因（没密钥 / 端点不通）。
+  const unroutableHint = (() => {
+    if (!unroutable) return ''
+    const failure = failures.find((item) => item.id === state.current?.provider)
+    if (failure !== undefined) return `：${failure.message}`
+    if (!groups.some((group) => group.id === state.current?.provider)) return '：该 provider 未公布任何模型'
+    return ''
+  })()
   const blockedReason = locked
     ? '本会话已锁定'
     : usableFrames === 0
@@ -930,7 +975,8 @@ export function LiangCalibrator({ locked, available, directory, load, select }) 
     }
   }
 
-  const commit = async (frame) => {
+  const commit = async (frame, options) => {
+    const force = options?.force === true
     const combo = ladder[frame]
     if (combo === undefined) return
     const entry = entryFor(combo)
@@ -938,7 +984,17 @@ export function LiangCalibrator({ locked, available, directory, load, select }) 
     const model = combo.modelId ?? entry?.model?.id
     if (provider === undefined || model === undefined || provider === '' || model === '') return
     if (matchesCurrent(frame)) return
-    // 等级不在该模型公布的范围内就先别写进会话：写了会让会话变成"模型不可用"。
+    // 这条路由当前不在目录里（provider 掉线 / 没密钥 / 模型被删）时默认不写进会话：
+    // 写了宿主会接受，但之后每次发送都被 session/model-unavailable 拒绝。
+    // 手填自建 API 的场景由用户点「仍要使用」显式放行。
+    const unavailable = availabilityProblem(combo)
+    if (unavailable !== null && !force) {
+      setActionError(unavailable)
+      setForceFrame(frame)
+      return
+    }
+    setForceFrame(null)
+    // 等级不在该模型公布的范围内同样不写进会话（这一条不给放行：宿主不会认）。
     const problem = effortProblem(combo)
     if (problem !== null) {
       setActionError(problem)
@@ -1003,8 +1059,8 @@ export function LiangCalibrator({ locked, available, directory, load, select }) 
       </button>
 
       {unroutable && (
-        <span className="ls-unroutable" role="alert">
-          当前模型不可用
+        <span className="ls-unroutable" role="alert" title={`当前模型不可用${unroutableHint}`}>
+          当前模型不可用{unroutableHint}
           <button type="button" className="ls-repair" onClick={repair}>修回可用档位</button>
         </span>
       )}
@@ -1017,7 +1073,23 @@ export function LiangCalibrator({ locked, available, directory, load, select }) 
         </span>
       )}
       {(actionError ?? state.error) != null && (
-        <span className="ls-err" role="alert">{actionError ?? state.error}</span>
+        <span className="ls-err" role="alert">
+          {actionError ?? state.error}
+          {forceFrame !== null && (
+            <button
+              type="button"
+              className="ls-force"
+              title="这条路由当前不在目录里，写进会话后发送可能被拒"
+              onClick={() => {
+                const frame = forceFrame
+                setForceFrame(null)
+                void commit(frame, { force: true })
+              }}
+            >
+              仍要使用
+            </button>
+          )}
+        </span>
       )}
 
       {expanded && (
@@ -1419,4 +1491,5 @@ export function apply(ctx) {
     inject: createSeatInject(ctx),
   }, LiangSeat))
 }
+
 

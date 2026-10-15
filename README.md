@@ -64,19 +64,26 @@
 ### 5. 模型不可用的自救
 
 会话当前选择的模型如果不在可用目录里，DSH 会在发送时拒绝：`session/model-unavailable: Select an available model before sending a message.`
-这种状态**不会自己恢复**，所以插件做了两道防线：
+这种状态**不会自己恢复**，所以插件做了四道防线：
 
-- **提交前校验等级**：目录里查得到这个模型时，显式等级必须是它公布的之一。手填了不存在的等级
-  （例如目录只有 `off/low/high/max`、你写了 `medium`）不会写进会话，而是就地提示
-  「该模型没有「medium」等级（可选：off / low / high / max）」；设置面板里对应的那一行也会被标黄。
-  目录里查不到这条路由时不做判断 —— 手填自建 API 的场景交给平台裁决。
-- **不可用提示 + 一键修回**：宿主明确回报当前选择不可用时（目录里的 `routable === false`），
-  输入框旁边会出现红字 **「当前模型不可用」** 和 **「修回可用档位」** 按钮：点一下会清掉挡在这条
-  路由上的本机设置（逐档 + 该档所属状态），跳到最近一条确实可提交的档位并提交。
+- **提交前校验可用性**：手填的 provider / 模型必须**当前真的在目录里**。给某几档指定过 `cmd`，
+  之后那个 provider 因为改端点、丢密钥而公布不出模型时，插件**不会再把它写进会话**，而是就地提示
+  「`cmd` 当前不可用：no API key for provider route "cmd"」。手填自建 API 的场景（目录里暂时还没有
+  这个 provider）默认同样拦下，但给一个 **「仍要使用」** 显式放行。
+- **提交前校验等级**：目录里查得到该模型时，显式等级必须是它公布的之一。手填了不存在的等级
+  （例如目录只有 `off/low/high/max`、你写了 `medium`）不会写进会话，而是提示可选值。
+- **同名模型优先沿用当前 provider**：`deepseek-flash` 往往同时被 `deepseek-official` 与
+  `deepseek-account` 公布。梯子优先落在**你当前所在的那个 provider** 上，不会因为"目录里排第一"
+  就把你悄悄换到一个没配密钥的 provider（那种情况目录照常公布模型，请求时才报 `MISSING_CREDENTIAL`）。
+- **不可用提示 + 一键修回**：宿主明确回报当前选择不可用时（目录里 `routable === false`），
+  输入框旁边出现红字 **「当前模型不可用」**（带上宿主给的失败原因）和 **「修回可用档位」** 按钮：
+  点一下会清掉挡在这条路由上的本机设置（逐档 + 该档所属状态），跳到最近一条确实可提交的档位并提交。
 
-> 事故记录（本插件第一个线上坑）：手填过 `cmd / deepseek/deepseek-v4.1-flash / medium` 之后，
-> provider 配置变更让这条路由从目录里消失，会话就卡成了"发不出消息"，而当时插件没有任何提示或出口。
-> 上面两道防线就是照着这个场景补的。
+> 事故记录：本插件踩过两个连着的坑 —— ① 把某几档指到 `cmd` 后，那个 provider 一度公布不出模型，
+> 插件照样写进会话，于是之后每次发送都被 `session/model-unavailable` 拒绝；② `deepseek-flash`
+> 同时挂在 `deepseek-official`（没配密钥）与 `deepseek-account` 两组下，梯子取了排在前面的 official，
+> 滑动时把本来能用的 account 路由悄悄换掉，下次发送就报 `MISSING_CREDENTIAL`。
+> 上面四道防线就是照着这两个场景补的。
 
 ### 本机数据都存哪
 
@@ -125,10 +132,10 @@
 
 ```sh
 # 从 Release 安装
-dsh plugin --profile <profile> add https://github.com/TerryYu12/dsh-liang-calibrator/releases/latest/download/dsh-liang-calibrator-0.9.1.tgz
+dsh plugin --profile <profile> add https://github.com/TerryYu12/dsh-liang-calibrator/releases/latest/download/dsh-liang-calibrator-0.9.2.tgz
 
 # 或本地 tarball
-dsh plugin --profile <profile> add /path/to/dsh-liang-calibrator-0.9.1.tgz
+dsh plugin --profile <profile> add /path/to/dsh-liang-calibrator-0.9.2.tgz
 ```
 
 `<profile>` 是你要装的 profile（通常是 `desktop`；用 `dsh plugin --profile desktop add …`）。
@@ -185,4 +192,5 @@ npm pack
 ## 许可证
 
 **代码**以 [MIT-0](LICENSE) 发布（不含 `assets/` 中的第三方图像素材，见上节）。
+
 

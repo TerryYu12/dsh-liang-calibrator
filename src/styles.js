@@ -737,6 +737,22 @@ export const styles = String.raw`
   cursor: pointer;
 }
 
+.ls-force {
+  margin-left: 6px;
+  padding: 0 6px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font-size: 10px;
+  line-height: 14px;
+  cursor: pointer;
+}
+
+.ls-force:hover {
+  background: rgba(255, 107, 107, 0.16);
+}
+
 .ls-repair:hover {
   background: rgba(255, 107, 107, 0.16);
 }
@@ -798,5 +814,6 @@ export const styles = String.raw`
   }
 }
 `
+
 
 
