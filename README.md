@@ -61,6 +61,23 @@
 - **停手 5 秒后自动淡出**（淡出 320ms），随后**原样还原**所有被改过的样式；
 - 不修改、不替换你设置的壁纸，也不写入任何持久状态 —— 关掉插件后界面与原来完全一致。
 
+### 5. 模型不可用的自救
+
+会话当前选择的模型如果不在可用目录里，DSH 会在发送时拒绝：`session/model-unavailable: Select an available model before sending a message.`
+这种状态**不会自己恢复**，所以插件做了两道防线：
+
+- **提交前校验等级**：目录里查得到这个模型时，显式等级必须是它公布的之一。手填了不存在的等级
+  （例如目录只有 `off/low/high/max`、你写了 `medium`）不会写进会话，而是就地提示
+  「该模型没有「medium」等级（可选：off / low / high / max）」；设置面板里对应的那一行也会被标黄。
+  目录里查不到这条路由时不做判断 —— 手填自建 API 的场景交给平台裁决。
+- **不可用提示 + 一键修回**：宿主明确回报当前选择不可用时（目录里的 `routable === false`），
+  输入框旁边会出现红字 **「当前模型不可用」** 和 **「修回可用档位」** 按钮：点一下会清掉挡在这条
+  路由上的本机设置（逐档 + 该档所属状态），跳到最近一条确实可提交的档位并提交。
+
+> 事故记录（本插件第一个线上坑）：手填过 `cmd / deepseek/deepseek-v4.1-flash / medium` 之后，
+> provider 配置变更让这条路由从目录里消失，会话就卡成了"发不出消息"，而当时插件没有任何提示或出口。
+> 上面两道防线就是照着这个场景补的。
+
 ### 本机数据都存哪
 
 - 路由设置：`localStorage` 的 `liang-calibrator:stages`；
@@ -108,10 +125,10 @@
 
 ```sh
 # 从 Release 安装
-dsh plugin --profile <profile> add https://github.com/TerryYu12/dsh-liang-calibrator/releases/latest/download/dsh-liang-calibrator-0.9.0.tgz
+dsh plugin --profile <profile> add https://github.com/TerryYu12/dsh-liang-calibrator/releases/latest/download/dsh-liang-calibrator-0.9.1.tgz
 
 # 或本地 tarball
-dsh plugin --profile <profile> add /path/to/dsh-liang-calibrator-0.9.0.tgz
+dsh plugin --profile <profile> add /path/to/dsh-liang-calibrator-0.9.1.tgz
 ```
 
 `<profile>` 是你要装的 profile（通常是 `desktop`；用 `dsh plugin --profile desktop add …`）。
@@ -168,3 +185,4 @@ npm pack
 ## 许可证
 
 **代码**以 [MIT-0](LICENSE) 发布（不含 `assets/` 中的第三方图像素材，见上节）。
+

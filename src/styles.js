@@ -711,6 +711,36 @@ export const styles = String.raw`
   background: rgba(226, 168, 78, 0.16);
 }
 
+/* 宿主判定"当前选择不在可用目录里"：发送会被拒，用错误色并给一键修回。 */
+.ls-unroutable {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 8px;
+  border: 1px solid rgba(255, 107, 107, 0.45);
+  border-radius: 999px;
+  background: rgba(255, 107, 107, 0.10);
+  color: var(--dsw-alias-state-error-primary, rgb(255, 107, 107));
+  font-size: 10px;
+  line-height: 15px;
+  white-space: nowrap;
+}
+
+.ls-repair {
+  padding: 0 6px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font-size: 10px;
+  line-height: 14px;
+  cursor: pointer;
+}
+
+.ls-repair:hover {
+  background: rgba(255, 107, 107, 0.16);
+}
+
 /* 站名行：标签按所属档位段居中（与滑片同一轨道坐标），挤不下时省略，当前段永远保留。 */
 .ls-stations {
   position: relative;

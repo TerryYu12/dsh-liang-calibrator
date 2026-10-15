@@ -459,6 +459,78 @@ export function LiangCalibrator({ locked, available, directory, load, select }) 
     return tierEntries.get(combo.modelId)
   }
 
+  /** 目录里这个模型公布的思考强度 id（没公布时返回空数组）。 */
+  const effortsOf = (model) => (model?.reasoning?.efforts ?? [])
+    .map((effort) => (typeof effort === 'string' ? effort : effort?.id))
+    .filter((id) => typeof id === 'string' && id !== '')
+
+  /**
+   * 提交前的等级校验：目录里查得到这个模型时，显式等级必须是它公布的之一。
+   *
+   * 否则会把会话写成一个宿主认为不可用的选择 —— 发送时直接报
+   * `session/model-unavailable`，而且用户没有任何自救入口（这是我踩过的坑）。
+   * 目录里查不到这条路由时返回 null：手填自建 API 的场景要保持可用，交给平台裁决。
+   */
+  const effortProblem = (combo) => {
+    if (combo === undefined || combo.effort === undefined) return null
+    const model = entryFor(combo)?.model
+    if (model === undefined) return null
+    const efforts = effortsOf(model)
+    if (efforts.length === 0) return `该模型不提供思考强度，已忽略「${combo.effort}」`
+    if (!efforts.includes(combo.effort)) {
+      return `该模型没有「${combo.effort}」等级（可选：${efforts.join(' / ')}）`
+    }
+    return null
+  }
+
+  /**
+   * 这一行设置是否"看起来可用"：provider / 模型在目录里，且等级在该模型公布的范围内。
+   * 只用来做提示标记（真正提交时还会再校验一次）。
+   */
+  const overrideKnown = (override) => {
+    if (override === null || override === undefined) return true
+    const provider = typeof override.provider === 'string' ? override.provider.trim() : ''
+    const model = typeof override.model === 'string' ? override.model.trim() : ''
+    const effort = typeof override.effort === 'string' ? override.effort.trim() : ''
+    if (provider === '' || model === '') return true
+    const group = groups.find((g) => g.id === provider)
+    if (group === undefined) return false
+    const found = group.models.find((m) => m.id === model)
+    if (found === undefined) return false
+    if (effort === '') return true
+    const efforts = effortsOf(found)
+    return efforts.length === 0 ? false : efforts.includes(effort)
+  }
+
+  /** 从某一档向外找最近一条"目录里确实可提交"的档位。 */
+  const nearestUsableFrame = (from) => {
+    for (let step = 0; step < SCORE_COUNT; step += 1) {
+      for (const frame of [from + step, from - step]) {
+        if (frame < 0 || frame >= SCORE_COUNT) continue
+        const combo = ladder[frame]
+        if (combo === undefined) continue
+        if (combo.provider !== undefined) {
+          if (effortProblem(combo) === null) return frame
+          continue
+        }
+        const entry = entryFor(combo)
+        if (entry?.group !== undefined && entry.model !== undefined && effortProblem(combo) === null) return frame
+      }
+    }
+    return null
+  }
+
+  /** 清掉挡在某一档上的本机设置（逐档 + 该档所属状态），让自动分档重新生效。 */
+  const clearOverridesAt = (frame) => {
+    setOverrides((current) => {
+      const frames = [...current.frames]
+      const stages = [...current.stages]
+      frames[frame] = null
+      stages[stageIndexFor(frame)] = null
+      return { frames, stages }
+    })
+  }
+
   /** 该帧的档位是否就是当前真实选择。 */
   const matchesCurrent = (frame) => {
     const combo = ladder[frame]
@@ -817,12 +889,46 @@ export function LiangCalibrator({ locked, available, directory, load, select }) 
   const busy = state.status === 'selecting'
   const scoreLabel = formatSignedScore(scoreOfFrame(chipFrame >= 0 ? chipFrame : localFrame))
   const wiperPercent = ((score - MIN_SCORE) / (MAX_SCORE - MIN_SCORE)) * 100
+  // 宿主明确说"当前选择不在可用目录里"：这是发送会被拒的状态，必须显眼提示并给自救入口。
+  const unroutable = state.routable === false && state.current != null
   const blockedReason = locked
     ? '本会话已锁定'
     : usableFrames === 0
       ? groupsReady ? '档位模型不可用' : '模型目录未就绪'
       : null
   const disabled = blockedReason !== null
+
+  /** 一键修回：清掉挡路的本机设置，跳到最近一条可用档位并提交。 */
+  const repair = async () => {
+    const frame = nearestUsableFrame(localFrame)
+    if (frame === null) return
+    clearOverridesAt(frame)
+    setActionError(null)
+    setScore(scoreOfFrame(frame))
+    setPending(scoreOfFrame(frame))
+    const combo = ladder[frame]
+    const entry = entryFor(combo)
+    const provider = combo?.provider ?? entry?.group?.id
+    const model = combo?.modelId ?? entry?.model?.id
+    if (provider === undefined || model === undefined || provider === '' || model === '') {
+      setPending(null)
+      return
+    }
+    let accepted = false
+    try {
+      accepted = await select({
+        provider,
+        model,
+        ...combo.effort === undefined ? {} : { reasoningEffort: combo.effort },
+      })
+    } catch (error) {
+      recordError(error, { kind: 'repair' })
+    }
+    if (!accepted) {
+      setPending(null)
+      setActionError(directory.getSnapshot().error ?? '修回失败')
+    }
+  }
 
   const commit = async (frame) => {
     const combo = ladder[frame]
@@ -832,6 +938,12 @@ export function LiangCalibrator({ locked, available, directory, load, select }) 
     const model = combo.modelId ?? entry?.model?.id
     if (provider === undefined || model === undefined || provider === '' || model === '') return
     if (matchesCurrent(frame)) return
+    // 等级不在该模型公布的范围内就先别写进会话：写了会让会话变成"模型不可用"。
+    const problem = effortProblem(combo)
+    if (problem !== null) {
+      setActionError(problem)
+      return
+    }
     setActionError(null)
     setPending(scoreOfFrame(frame))
     let accepted = false
@@ -890,6 +1002,12 @@ export function LiangCalibrator({ locked, available, directory, load, select }) 
         <span className="ls-trigger-text">{routeLabel}</span>
       </button>
 
+      {unroutable && (
+        <span className="ls-unroutable" role="alert">
+          当前模型不可用
+          <button type="button" className="ls-repair" onClick={repair}>修回可用档位</button>
+        </span>
+      )}
       {blockedReason !== null && (
         <span className="ls-blocked" role="status">
           {blockedReason}
@@ -988,7 +1106,7 @@ export function LiangCalibrator({ locked, available, directory, load, select }) 
                     listId={listId}
                     override={override}
                     hint={hint}
-                    known={override?.provider === undefined || override.provider === '' || groups.some((group) => group.id === override.provider)}
+                    known={overrideKnown(override)}
                     onChange={(patch) => updateOverride('stage', index, patch)}
                   />
                 )
@@ -1005,7 +1123,7 @@ export function LiangCalibrator({ locked, available, directory, load, select }) 
                     listId={listId}
                     override={override}
                     hint={hint}
-                    known={override?.provider === undefined || override.provider === '' || groups.some((group) => group.id === override.provider)}
+                    known={overrideKnown(override)}
                     onChange={(patch) => updateOverride('frame', frame, patch)}
                   />
                 )
@@ -1301,3 +1419,4 @@ export function apply(ctx) {
     inject: createSeatInject(ctx),
   }, LiangSeat))
 }
+

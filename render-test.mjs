@@ -631,6 +631,48 @@ async function mount(snapshot, props = {}, { expand = true } = {}) {
   console.log(`scenario 21 (dense names): ${labels.length}/31 labels kept`)
 }
 
+// 22) 等级校验：模型没公布的等级不许写进会话。
+//
+// 线上事故复现：手填了该模型没有的等级（如目录只有 off/low/high/max 却写了 medium），
+// 会话被写成宿主认为不可用的选择，之后每次发送都报 session/model-unavailable。
+{
+  const { container, dir } = await mount(CATALOG)
+  await click(container.querySelector('.ls-gear'))
+  await click(container.querySelectorAll('.ls-mode-btn')[1])   // 按档位 31
+  const row = container.querySelectorAll('.ls-settings-row')[30]
+  const inputs = row.querySelectorAll('input')
+  await typeInto(inputs[0], 'deepseek-account')
+  await typeInto(inputs[1], 'deepseek-v4-pro')
+  await typeInto(inputs[2], 'medium')                          // 目录里只有 off/low/high/max
+  check(row.dataset.unknown === 'true', '非法等级的设置行应被标记')
+
+  await click(container.querySelector('.ls-gear'))
+  await typeInto(container.querySelector('input.ls-range'), '15')
+  check(dir.selections.length === 0, `非法等级不应提交，实际 ${JSON.stringify(dir.selections)}`)
+  check((container.textContent ?? '').includes('该模型没有'), `应就地说明原因，实际：${container.textContent}`)
+  console.log('scenario 22 (effort validation): ok')
+}
+
+// 23) 宿主判定"当前选择不可用"时：显眼提示 + 一键修回可用档位。
+{
+  const { container, dir } = await mount({
+    ...CATALOG,
+    current: { provider: 'cmd', model: 'deepseek/deepseek-v4.1-flash', reasoningEffort: 'medium' },
+    routable: false,
+  })
+  check((container.textContent ?? '').includes('当前模型不可用'), `应提示不可用，实际：${container.textContent}`)
+  const repair = container.querySelector('.ls-repair')
+  check(repair !== null, '应提供「修回可用档位」')
+
+  await click(repair)
+  const submitted = dir.selections.at(-1)
+  check(submitted !== undefined, '修回应提交一条可用选择')
+  const effort = submitted?.reasoningEffort
+  check(effort === undefined || ['off', 'low', 'high', 'max'].includes(effort), `修回不应带非法等级，实际 ${effort}`)
+  check(typeof submitted?.model === 'string' && submitted.model !== '', `修回应带模型，实际 ${JSON.stringify(submitted)}`)
+  console.log('scenario 23 (unroutable repair):', JSON.stringify(submitted))
+}
+
 await rm('./.client.test.cjs', { force: true })
 
 if (failures.length > 0) {
