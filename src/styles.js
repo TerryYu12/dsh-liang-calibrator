@@ -334,6 +334,28 @@ export const styles = String.raw`
   background: rgba(21, 128, 219, 0.10);
 }
 
+.ls-settings-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  color: var(--dsw-alias-label-caption);
+  font-size: 10.5px;
+  line-height: 16px;
+  cursor: pointer;
+}
+
+.ls-settings-toggle input {
+  accent-color: rgb(78, 168, 255);
+  cursor: pointer;
+}
+
+.ls-settings-toggle code {
+  padding: 0 3px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.07);
+  color: rgb(137, 210, 255);
+}
 .ls-settings-hint {
   margin: 4px 0 0;
   color: var(--dsw-alias-label-caption);
@@ -814,6 +836,7 @@ export const styles = String.raw`
   }
 }
 `
+
 
 
 

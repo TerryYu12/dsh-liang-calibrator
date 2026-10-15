@@ -734,6 +734,33 @@ async function mount(snapshot, props = {}, { expand = true } = {}) {
   console.log('scenario 26 (failure reason surfaced): ok')
 }
 
+// 27) 当前 provider 是需要 API Key 的 deepseek-official（本机没配）：默认应自动落到
+//     deepseek-account（DSH 自己在没配 Key 时的默认选择），关掉开关才留在原 provider。
+{
+  const catalog = {
+    ...CATALOG,
+    current: { provider: 'deepseek-official', model: 'deepseek-flash' },
+    groups: [
+      { id: 'deepseek-official', models: [model('deepseek-flash', 'DeepSeek-V41-Flash'), model('deepseek-v4-pro', 'DeepSeek-V4-Pro')] },
+      { id: 'deepseek-account', models: [model('deepseek-flash', 'DeepSeek-V41-Flash'), model('deepseek-v4-pro', 'DeepSeek-V4-Pro')] },
+    ],
+  }
+
+  dom.window.localStorage.removeItem('liang-calibrator:prefer-account')
+  const first = await mount(catalog)
+  await typeInto(first.container.querySelector('input.ls-range'), '-12')
+  const auto = first.dir.selections.at(-1)
+  check(auto?.provider === 'deepseek-account', `默认应落到 account，实际 ${JSON.stringify(auto)}`)
+
+  dom.window.localStorage.setItem('liang-calibrator:prefer-account', 'false')
+  const off = await mount(catalog)
+  await typeInto(off.container.querySelector('input.ls-range'), '-12')
+  const kept = off.dir.selections.at(-1)
+  check(kept?.provider === 'deepseek-official', `关掉开关后应沿用当前 provider，实际 ${JSON.stringify(kept)}`)
+  dom.window.localStorage.removeItem('liang-calibrator:prefer-account')
+  console.log('scenario 27 (prefer account):', JSON.stringify(auto), JSON.stringify(kept))
+}
+
 await rm('./.client.test.cjs', { force: true })
 
 if (failures.length > 0) {

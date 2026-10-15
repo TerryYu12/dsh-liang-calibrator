@@ -51,6 +51,9 @@ const OVERRIDE_KEY = 'liang-calibrator:stages'
 const NAMES_KEY = 'liang-calibrator:names'
 const MAX_ERRORS = 8
 const POPOVER_WIDTH = 408
+/** 需要 API Key 的官方路由与「登录即可用」的账号路由之间的取舍。 */
+const ACCOUNT_PROVIDER = 'deepseek-account'
+const PREFER_ACCOUNT_KEY = 'liang-calibrator:prefer-account'
 
 const EMPTY_SNAPSHOT = Object.freeze({
   current: null, routable: null, groups: [], failures: [], status: 'idle', pending: null, error: null,
@@ -373,6 +376,13 @@ export function LiangCalibrator({ locked, available, directory, load, select }) 
   const [view, setView] = useState('slider')
   const [settingsMode, setSettingsMode] = useState('stage')
   const [forceFrame, setForceFrame] = useState(null)
+  const [preferAccount, setPreferAccount] = useState(() => {
+    try {
+      return window.localStorage.getItem(PREFER_ACCOUNT_KEY) !== 'false'
+    } catch {
+      return true
+    }
+  })
   const [anchor, setAnchor] = useState(null)
   const rootRef = useRef(null)
   const triggerRef = useRef(null)
@@ -394,20 +404,26 @@ export function LiangCalibrator({ locked, available, directory, load, select }) 
 
   // 自动梯子用的"模型分档"落点（MODEL_TIERS 顺序即强度顺序）。
   //
-  // 同一个模型 id 可能同时被多个 provider 公布（deepseek-official 与 deepseek-account 都公布
-  // deepseek-flash）。这里**优先沿用当前选择所在的 provider**：否则滑一下就会被悄悄换到另一个
-  // provider —— 哪怕那个 provider 其实没有密钥（目录照常公布模型，请求时才报 MISSING_CREDENTIAL）。
+  // 同一个模型 id 往往被多个 provider 公布（deepseek-flash 同时在 deepseek-official 与
+  // deepseek-account 下）。而"目录里有"≠"请求能成功"：`deepseek-official` 这类需要 API Key 的
+  // provider 即使没配密钥也会照常公布模型，请求时才报 MISSING_CREDENTIAL。客户端拿不到
+  // "某 provider 有没有配密钥"这个信号（宿主侧的 hasProviderApiKey 没有 Remote 暴露），
+  // 所以这里跟 DSH 自己的规则对齐：**没有 API Key 时用 deepseek-account**
+  // （见宿主 initializeDefaultModel）。默认开启，可用开关关掉以固定到当前 provider。
   const tierEntries = useMemo(() => {
     const table = new Map()
     const currentProvider = state.current?.provider
     for (const modelId of MODEL_TIERS) {
       const candidates = groups.filter((g) => g.models.some((m) => m.id === modelId))
-      const group = candidates.find((g) => g.id === currentProvider) ?? candidates[0]
-      const model = group?.models.find((m) => m.id === modelId)
-      table.set(modelId, { group, model })
+      const account = candidates.find((g) => g.id === ACCOUNT_PROVIDER)
+      const preferred = preferAccount && account !== undefined
+        ? account
+        : candidates.find((g) => g.id === currentProvider) ?? candidates[0]
+      const model = preferred?.models.find((m) => m.id === modelId)
+      table.set(modelId, { group: preferred, model })
     }
     return table
-  }, [groups, state.current?.provider])
+  }, [groups, state.current?.provider, preferAccount])
 
   const activeTiers = useMemo(
     () => MODEL_TIERS.filter((modelId) => tierEntries.get(modelId)?.group !== undefined),
@@ -645,6 +661,14 @@ export function LiangCalibrator({ locked, available, directory, load, select }) 
   useEffect(() => {
     writeOverrides(overrides)
   }, [overrides])
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(PREFER_ACCOUNT_KEY, preferAccount ? 'true' : 'false')
+    } catch {
+      // 存不下只影响持久化。
+    }
+  }, [preferAccount])
 
   useEffect(() => {
     writeNames(names)
@@ -1234,6 +1258,19 @@ export function LiangCalibrator({ locked, available, directory, load, select }) 
               {settingsMode === 'image' && imageNotice !== null && (
                 <p className="ls-settings-note">{imageNotice}</p>
               )}
+              <label className="ls-settings-toggle">
+                <input
+                  type="checkbox"
+                  checked={preferAccount}
+                  onChange={(event) => setPreferAccount(event.target.checked)}
+                />
+                自动档位优先使用 <code>deepseek-account</code>
+              </label>
+              <p className="ls-settings-hint">
+                {preferAccount
+                  ? '当前：自动档位固定落在登录账号上（同批官方模型，不需要 API Key）——这是 DSH 自己在「没配 API Key」时的默认选择。'
+                  : '当前：自动档位沿用你当前所在的 provider。若它需要 API Key 而你没配，滑动会把会话切到发不出请求的路由上。'}
+              </p>
               <p className="ls-settings-hint">
                 {settingsMode === 'stage' && '六个状态各一条：填了 provider 与模型后，该状态内的每一档都用这条路由。'}
                 {settingsMode === 'frame' && '31 档逐档设置，优先于「按状态」的设置；灰色占位符是自动分档会选的模型。'}
